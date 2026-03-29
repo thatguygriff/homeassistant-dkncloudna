@@ -1,0 +1,11 @@
+{
+  "domain": "dkncloudna",
+  "name": "DKN Cloud NA",
+  "codeowners": ["@lavoiesl"],
+  "config_flow": true,
+  "documentation": "https://github.com/lavoiesl/homeassistant-dkncloudna",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/lavoiesl/homeassistant-dkncloudna/issues",
+  "version": "0.1.0"
+}
