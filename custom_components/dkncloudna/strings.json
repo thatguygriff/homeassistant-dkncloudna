@@ -1,0 +1,73 @@
+{
+  "title": "DKN Cloud NA",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Sign in",
+        "description": "Enter your DKN Cloud NA account credentials.",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "scan_interval": "Scan interval (seconds)",
+          "expose_pii": "Show tokens after login"
+        },
+        "data_description": {
+          "scan_interval": "How often to poll the DKN Cloud NA API (30–300 seconds).",
+          "expose_pii": "Display access and refresh tokens after login for advanced use."
+        }
+      },
+      "token_display": {
+        "title": "Tokens",
+        "description": "Your tokens have been saved. You can copy them for reference.",
+        "data": {
+          "access_token_display": "Access token",
+          "refresh_token_display": "Refresh token"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate",
+        "description": "Your session for {username} has expired. Enter your password to get a new token.",
+        "data": {
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password.",
+      "cannot_connect": "Cannot connect to DKN Cloud NA.",
+      "timeout": "The request timed out. Please try again.",
+      "unknown": "Unexpected error. Check the logs for details."
+    },
+    "abort": {
+      "already_configured": "This account is already configured.",
+      "reauth_successful": "Reauthentication successful.",
+      "reauth_failed": "Reauthentication failed."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "data": {
+          "scan_interval": "Scan interval (seconds)",
+          "expose_pii": "Show tokens after login"
+        },
+        "data_description": {
+          "scan_interval": "How often to poll the DKN Cloud NA API (30–300 seconds)."
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "room_temperature": {"name": "Room temperature"},
+      "exterior_temperature": {"name": "Exterior temperature"},
+      "wifi_signal": {"name": "Wi-Fi signal"},
+      "error_code": {"name": "Error code"}
+    },
+    "binary_sensor": {
+      "connected": {"name": "Connected"},
+      "machine_ready": {"name": "Machine ready"}
+    }
+  }
+}
