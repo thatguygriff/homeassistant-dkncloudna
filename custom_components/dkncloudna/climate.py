@@ -10,7 +10,7 @@ from homeassistant.components.climate import (
     HVACMode,
 )
 from homeassistant.const import PRECISION_WHOLE, UnitOfTemperature
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -66,8 +66,7 @@ async def async_setup_entry(
     """Set up climate entities from a config entry."""
     coordinator: DknCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     async_add_entities(
-        DknClimateEntity(coordinator, mac)
-        for mac in (coordinator.data or {})
+        DknClimateEntity(coordinator, mac) for mac in (coordinator.data or {})
     )
 
 
@@ -95,7 +94,6 @@ class DknClimateEntity(DknEntity, ClimateEntity):
         super().__init__(coordinator, mac)
         self._attr_unique_id = f"{DOMAIN}_{mac}"
 
-    @callback
     @property
     def supported_features(self) -> ClimateEntityFeature:
         """Return feature flags appropriate for the current HVAC mode."""
