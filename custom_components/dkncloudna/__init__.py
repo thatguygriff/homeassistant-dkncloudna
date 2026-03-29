@@ -52,13 +52,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LOGGER.info(
         "DKN Cloud NA set up (entry=%s, scan_interval=%ss)",
         entry.entry_id,
-        coordinator.update_interval.total_seconds() if coordinator.update_interval else "?",
+        coordinator.update_interval.total_seconds()
+        if coordinator.update_interval
+        else "?",
     )
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    client: DknCloudNaClient | None = (
+        hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("client")
+    )
+    if client is not None:
+        await client.disconnect_socket()
+
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id, None)

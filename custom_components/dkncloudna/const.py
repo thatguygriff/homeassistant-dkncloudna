@@ -9,11 +9,14 @@ LOGGER = logging.getLogger(__package__)
 MANUFACTURER = "Daikin"
 
 # API
-BASE_URL = "https://dkncloudna.com/api/v1"
-API_LOGIN = "/auth/login/dknUsa"
-API_IS_LOGGED_IN = "/users/isLoggedIn/dknUsa"
-API_REFRESH_TOKEN = "/auth/refreshToken/{refresh_token}/dknUsa"
-API_INSTALLATIONS = "/installations/dknUsa"
+BASE_URL = "https://dkncloudna.com"
+API_BASE = "/api/v1"
+API_LOGIN = f"{API_BASE}/auth/login/dknUsa"
+API_IS_LOGGED_IN = f"{API_BASE}/users/isLoggedIn/dknUsa"
+API_REFRESH_TOKEN = f"{API_BASE}/auth/refreshToken/{{refresh_token}}/dknUsa"
+API_INSTALLATIONS = f"{API_BASE}/installations/dknUsa"
+API_SOCKET_PATH = f"{API_BASE}/devices/socket.io/"
+API_USERS_NAMESPACE = "/users"
 
 # The DKN Cloud NA API requires a mobile-like User-Agent.
 # This matches what the official DKN Cloud NA iOS app sends.
@@ -23,6 +26,7 @@ USER_AGENT = (
 )
 
 REQUEST_TIMEOUT = 30  # seconds
+SOCKET_RECONNECT_ATTEMPTS = 5
 
 # Config/options keys
 CONF_SCAN_INTERVAL = "scan_interval"

@@ -49,6 +49,11 @@ class DknCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         """Fetch all installations and flatten into {mac: device_dict}."""
         try:
             installations = await self.client.fetch_installations()
+            await self.client.ensure_socket_connection(
+                installations,
+                self.async_handle_socket_device_data,
+                self.async_request_refresh,
+            )
         except DknAuthError as err:
             # 401 — trigger the reauth UI and mark entities unavailable.
             raise ConfigEntryAuthFailed("Token invalid or expired") from err
@@ -60,13 +65,25 @@ class DknCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             raise UpdateFailed(f"Unexpected error: {type(err).__name__}") from err
 
         devices: dict[str, dict[str, Any]] = {}
+        existing = self.data or {}
         for installation in installations or []:
             inst_id = installation.get("_id", "")
             for device in installation.get("devices", []):
                 mac = str(device.get("mac") or "").strip().lower()
                 if not mac:
                     continue
-                device["_installation_id"] = inst_id
-                devices[mac] = device
+                devices[mac] = {
+                    **existing.get(mac, {}),
+                    **device,
+                    "_installation_id": inst_id,
+                }
 
         return devices
+
+    async def async_handle_socket_device_data(
+        self, mac: str, data: dict[str, Any]
+    ) -> None:
+        """Merge live device-data from Socket.IO into coordinator state."""
+        current = dict(self.data or {})
+        current[mac] = {**current.get(mac, {}), **data}
+        self.async_set_updated_data(current)

@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiohttp import ClientError, ClientResponse, ClientSession, ContentTypeError
+import socketio
 
 from .const import (
     API_INSTALLATIONS,
     API_IS_LOGGED_IN,
     API_LOGIN,
     API_REFRESH_TOKEN,
+    API_SOCKET_PATH,
+    API_USERS_NAMESPACE,
     BASE_URL,
     LOGGER,
     REQUEST_TIMEOUT,
+    SOCKET_RECONNECT_ATTEMPTS,
     USER_AGENT,
 )
 
@@ -48,6 +53,14 @@ class DknCloudNaClient:
         self._password = password
         self.token = token
         self.refresh_token = refresh_token
+        self._socket: socketio.AsyncClient | None = None
+        self._socket_installations: set[str] = set()
+        self._socket_token: str | None = None
+        self._socket_lock = asyncio.Lock()
+        self._socket_data_callback: (
+            Callable[[str, dict[str, Any]], Awaitable[None]] | None
+        ) = None
+        self._socket_refresh_callback: Callable[[], Awaitable[None]] | None = None
 
     def clear_password(self) -> None:
         """Discard password from memory after token exchange."""
@@ -106,6 +119,89 @@ class DknCloudNaClient:
             raise DknConnectionError("Unexpected installations response")
         return data
 
+    async def ensure_socket_connection(
+        self,
+        installations: list[dict[str, Any]],
+        data_callback: Callable[[str, dict[str, Any]], Awaitable[None]],
+        refresh_callback: Callable[[], Awaitable[None]],
+    ) -> None:
+        """Connect Socket.IO listeners for installation device-data updates."""
+        installation_ids = {
+            str(installation.get("_id") or "").strip()
+            for installation in installations
+            if installation.get("_id")
+        }
+        async with self._socket_lock:
+            if not installation_ids:
+                await self._disconnect_socket_locked()
+                return
+
+            reconnect_required = (
+                self._socket is None
+                or not self._socket.connected
+                or self._socket_token != self.token
+                or self._socket_installations != installation_ids
+            )
+            if not reconnect_required:
+                return
+
+            await self._disconnect_socket_locked()
+
+            if not self.token:
+                raise DknAuthError("Missing access token")
+
+            self._socket_data_callback = data_callback
+            self._socket_refresh_callback = refresh_callback
+
+            sio = socketio.AsyncClient(
+                handle_sigint=False,
+                logger=False,
+                engineio_logger=False,
+                reconnection=True,
+                reconnection_attempts=SOCKET_RECONNECT_ATTEMPTS,
+            )
+
+            self._register_socket_handlers(sio, installation_ids)
+
+            namespaces = [
+                API_USERS_NAMESPACE,
+                *self._installation_namespaces(installation_ids),
+            ]
+            try:
+                await sio.connect(
+                    BASE_URL,
+                    headers={"Authorization": f"Bearer {self.token}"},
+                    transports=["polling", "websocket"],
+                    socketio_path=API_SOCKET_PATH.strip("/"),
+                    namespaces=namespaces,
+                    wait_timeout=REQUEST_TIMEOUT,
+                )
+            except Exception as err:  # noqa: BLE001
+                LOGGER.debug("DKN socket connect failed: %s", err)
+                await sio.disconnect()
+                return
+
+            self._socket = sio
+            self._socket_installations = installation_ids
+            self._socket_token = self.token
+
+    async def disconnect_socket(self) -> None:
+        """Disconnect the Socket.IO client if it is connected."""
+        async with self._socket_lock:
+            await self._disconnect_socket_locked()
+
+    async def _disconnect_socket_locked(self) -> None:
+        """Disconnect the Socket.IO client while holding the socket lock."""
+        socket = self._socket
+        self._socket = None
+        self._socket_installations = set()
+        self._socket_token = None
+        if socket is not None:
+            try:
+                await socket.disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+
     def _store_tokens(self, data: Any) -> None:
         """Persist access and refresh tokens from an API response."""
         if not isinstance(data, dict):
@@ -120,6 +216,60 @@ class DknCloudNaClient:
 
         self.token = token
         self.refresh_token = refresh_token
+
+    def _register_socket_handlers(
+        self,
+        sio: socketio.AsyncClient,
+        installation_ids: set[str],
+    ) -> None:
+        """Register Socket.IO event handlers for the active installations."""
+
+        @sio.on("control-new-device", namespace=API_USERS_NAMESPACE)
+        async def _on_new_device(_: Any) -> None:
+            await self._request_socket_refresh()
+
+        @sio.on("control-deleted-device", namespace=API_USERS_NAMESPACE)
+        async def _on_deleted_device(_: Any) -> None:
+            await self._request_socket_refresh()
+
+        @sio.on("control-deleted-installation", namespace=API_USERS_NAMESPACE)
+        async def _on_deleted_installation(_: Any) -> None:
+            await self._request_socket_refresh()
+
+        for installation_id in installation_ids:
+            namespace = self._installation_namespace(installation_id)
+
+            @sio.on("device-data", namespace=namespace)
+            async def _on_device_data(
+                message: Any, *, _namespace: str = namespace
+            ) -> None:
+                if not isinstance(message, dict):
+                    return
+                mac = str(message.get("mac") or "").strip().lower()
+                data = message.get("data")
+                if not mac or not isinstance(data, dict):
+                    return
+                installation_id = _namespace.split("/", 1)[1].split("::", 1)[0]
+                if self._socket_data_callback is not None:
+                    await self._socket_data_callback(
+                        mac, {**data, "_installation_id": installation_id}
+                    )
+
+    async def _request_socket_refresh(self) -> None:
+        """Request a coordinator refresh after a socket topology change."""
+        if self._socket_refresh_callback is not None:
+            await self._socket_refresh_callback()
+
+    def _installation_namespaces(self, installation_ids: set[str]) -> list[str]:
+        """Return sorted Socket.IO namespaces for installations."""
+        return [
+            self._installation_namespace(installation_id)
+            for installation_id in sorted(installation_ids)
+        ]
+
+    def _installation_namespace(self, installation_id: str) -> str:
+        """Return the Socket.IO namespace for one installation."""
+        return f"/{installation_id}::dknUsa"
 
     async def _request(
         self,
