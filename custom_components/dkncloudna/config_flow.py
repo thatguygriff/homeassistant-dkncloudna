@@ -82,17 +82,14 @@ class DknConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_configured()
 
                 session = async_get_clientsession(self.hass)
-                client = DknCloudNaClient(
-                    email, session, password=password, token=None
-                )
+                client = DknCloudNaClient(email, session, password=password, token=None)
                 try:
                     await asyncio.wait_for(client.login(), timeout=60.0)
                 except TimeoutError:
                     errors["base"] = "timeout"
                 except DknAuthError:
                     errors["base"] = "invalid_auth"
-                except (DknConnectionError, NotImplementedError):
-                    # NotImplementedError: stub not yet implemented → treat as cannot_connect
+                except DknConnectionError:
                     errors["base"] = "cannot_connect"
                 except Exception:  # noqa: BLE001
                     _LOGGER.exception("Unexpected error during login")
@@ -132,9 +129,7 @@ class DknConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
-                vol.Optional(
-                    "access_token_display", default=self._token
-                ): cv.string,
+                vol.Optional("access_token_display", default=self._token): cv.string,
                 vol.Optional(
                     "refresh_token_display", default=self._refresh_token
                 ): cv.string,
@@ -195,7 +190,7 @@ class DknConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "timeout"
             except DknAuthError:
                 errors["base"] = "invalid_auth"
-            except (DknConnectionError, NotImplementedError):
+            except DknConnectionError:
                 errors["base"] = "cannot_connect"
             except Exception:  # noqa: BLE001
                 errors["base"] = "unknown"
@@ -228,7 +223,9 @@ class DknOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         opts = self._entry.options
         defaults = {
-            CONF_SCAN_INTERVAL: int(opts.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)),
+            CONF_SCAN_INTERVAL: int(
+                opts.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+            ),
             CONF_EXPOSE_PII: bool(opts.get(CONF_EXPOSE_PII, False)),
         }
         schema = vol.Schema(

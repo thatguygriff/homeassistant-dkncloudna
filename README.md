@@ -71,6 +71,7 @@ Each device exposes the following entities:
 
 ## Known Limitations & Roadmap
 
+- **Login and device discovery are implemented.** The integration authenticates against the DKN Cloud NA API and discovers configured devices.
 - **Device control is not yet implemented.** This release establishes the integration scaffolding and entity structure. Setting temperature, mode, fan speed, and swing will be implemented in a future release.
 - Real-time updates via Socket.IO are not used; the integration polls the cloud API on a configurable interval (default 60s).
 - Temperature units follow what the device reports; Fahrenheit devices are converted to Celsius for Home Assistant.

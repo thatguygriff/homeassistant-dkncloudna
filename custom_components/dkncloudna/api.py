@@ -1,17 +1,22 @@
-"""DKN Cloud NA API client stub.
-
-Real HTTP calls are implemented in a future phase. This stub defines the
-interface and returns hardcoded data so the rest of the integration can be
-developed and tested without live credentials.
-"""
+"""DKN Cloud NA API client."""
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from aiohttp import ClientSession
+from aiohttp import ClientError, ClientResponse, ClientSession, ContentTypeError
 
-from .const import LOGGER
+from .const import (
+    API_INSTALLATIONS,
+    API_IS_LOGGED_IN,
+    API_LOGIN,
+    API_REFRESH_TOKEN,
+    BASE_URL,
+    LOGGER,
+    REQUEST_TIMEOUT,
+    USER_AGENT,
+)
 
 
 class DknAuthError(Exception):
@@ -49,75 +54,153 @@ class DknCloudNaClient:
         self._password = None
 
     async def login(self) -> None:
-        """Exchange email+password for access and refresh tokens.
+        """Exchange email+password for access and refresh tokens."""
+        if not self._password:
+            raise DknAuthError("Missing password")
 
-        Sets self.token and self.refresh_token on success.
-        Raises DknAuthError on bad credentials, DknConnectionError on network failure.
-        """
-        # TODO: implement real POST to API_LOGIN
-        LOGGER.debug("DknCloudNaClient.login() stub called for %s", self._username)
-        raise NotImplementedError("login() not yet implemented")
+        data = await self._request(
+            "POST",
+            API_LOGIN,
+            json_body={"email": self._username, "password": self._password},
+            auth_error_statuses={400, 401, 403},
+        )
+        self._store_tokens(data)
 
     async def is_logged_in(self) -> bool:
         """Return True if the current token is still valid."""
-        # TODO: implement real GET to API_IS_LOGGED_IN
-        raise NotImplementedError("is_logged_in() not yet implemented")
+        try:
+            await self._request(
+                "GET",
+                API_IS_LOGGED_IN,
+                require_auth=True,
+                auth_error_statuses={401, 403},
+            )
+        except DknAuthError:
+            return False
+
+        return True
 
     async def refresh_access_token(self) -> None:
-        """Use the refresh token to obtain a new access token.
+        """Use the refresh token to obtain a new access token."""
+        if not self.refresh_token:
+            raise DknAuthError("Missing refresh token")
 
-        Updates self.token on success.
-        Raises DknAuthError if the refresh token is also expired.
-        """
-        # TODO: implement real GET to API_REFRESH_TOKEN
-        raise NotImplementedError("refresh_access_token() not yet implemented")
+        data = await self._request(
+            "GET",
+            API_REFRESH_TOKEN.format(refresh_token=self.refresh_token),
+            require_auth=bool(self.token),
+            auth_error_statuses={400, 401, 403},
+        )
+        self._store_tokens(data)
 
     async def fetch_installations(self) -> list[dict[str, Any]]:
-        """Return all installations and their devices.
+        """Return all installations and their devices."""
+        data = await self._request(
+            "GET",
+            API_INSTALLATIONS,
+            require_auth=True,
+            retry_on_auth=True,
+            auth_error_statuses={401, 403},
+        )
+        if not isinstance(data, list):
+            raise DknConnectionError("Unexpected installations response")
+        return data
 
-        Each installation contains a list of DeviceInfo dicts.
-        Returns stub data for scaffolding.
-        """
-        LOGGER.debug("DknCloudNaClient.fetch_installations() stub — returning fake data")
-        return [
-            {
-                "_id": "stub-installation-1",
-                "name": "My Home",
-                "devices": [
-                    {
-                        "mac": "aa:bb:cc:dd:ee:ff",
-                        "name": "Living Room AC",
-                        "power": False,
-                        "mode": 1,
-                        "real_mode": 1,
-                        "work_temp": 22.0,
-                        "ext_temp": 18.0,
-                        "units": 0,
-                        "setpoint_air_auto": 22.0,
-                        "setpoint_air_cool": 24.0,
-                        "setpoint_air_heat": 20.0,
-                        "range_sp_auto_air_min": 16,
-                        "range_sp_auto_air_max": 32,
-                        "range_sp_cool_air_min": 16,
-                        "range_sp_cool_air_max": 32,
-                        "range_sp_hot_air_min": 16,
-                        "range_sp_hot_air_max": 32,
-                        "speed_state": 0,
-                        "speed_available": [0, 2, 3, 4, 5, 6],
-                        "slats_vertical_1": 0,
-                        "machineready": True,
-                        "isConnected": True,
-                        "tsensor_error": False,
-                        "stat_rssi": -65,
-                        "stat_ssid": "MyWiFi",
-                        "version": "1.0.0",
-                        "error_value": 0,
-                        "error_ascii1": "",
-                        "error_ascii2": "",
-                    }
-                ],
-            }
-        ]
+    def _store_tokens(self, data: Any) -> None:
+        """Persist access and refresh tokens from an API response."""
+        if not isinstance(data, dict):
+            raise DknConnectionError("Unexpected authentication response")
+
+        token = data.get("token")
+        refresh_token = data.get("refreshToken")
+        if not isinstance(token, str) or not token:
+            raise DknConnectionError("Authentication response missing token")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            raise DknConnectionError("Authentication response missing refresh token")
+
+        self.token = token
+        self.refresh_token = refresh_token
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        require_auth: bool = False,
+        retry_on_auth: bool = False,
+        auth_error_statuses: set[int] | None = None,
+    ) -> Any:
+        """Perform an API request and decode the response body."""
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        }
+        if json_body is not None:
+            headers["Content-Type"] = "application/json"
+        if require_auth:
+            if not self.token:
+                raise DknAuthError("Missing access token")
+            headers["Authorization"] = f"Bearer {self.token}"
+
+        url = f"{BASE_URL}{path}"
+        safe_body = {
+            key: ("***" if key == "password" else value)
+            for key, value in (json_body or {}).items()
+        }
+        LOGGER.debug("DKN request %s %s body=%s", method, url, safe_body or None)
+
+        try:
+            async with self._session.request(
+                method,
+                url,
+                json=json_body,
+                headers=headers,
+                timeout=REQUEST_TIMEOUT,
+            ) as response:
+                data = await self._read_response(response)
+        except asyncio.TimeoutError as err:
+            raise DknConnectionError("Request timed out") from err
+        except ClientError as err:
+            raise DknConnectionError(str(err) or type(err).__name__) from err
+
+        LOGGER.debug("DKN response %s %s status=%s", method, url, response.status)
+
+        if response.status in (auth_error_statuses or set()):
+            if retry_on_auth and self.refresh_token:
+                await self.refresh_access_token()
+                return await self._request(
+                    method,
+                    path,
+                    json_body=json_body,
+                    require_auth=require_auth,
+                    retry_on_auth=False,
+                    auth_error_statuses=auth_error_statuses,
+                )
+            raise DknAuthError(self._error_message(data, response))
+
+        if response.status >= 400:
+            raise DknConnectionError(self._error_message(data, response))
+
+        return data
+
+    async def _read_response(self, response: ClientResponse) -> Any:
+        """Decode a JSON response body, falling back to text."""
+        try:
+            return await response.json(content_type=None)
+        except ContentTypeError:
+            return await response.text()
+
+    def _error_message(self, data: Any, response: ClientResponse) -> str:
+        """Build a useful error message from an API response."""
+        if isinstance(data, dict):
+            for key in ("message", "error", "detail"):
+                value = data.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        if isinstance(data, str) and data:
+            return data
+        return f"HTTP {response.status}: {response.reason}"
 
     def __repr__(self) -> str:
         first = self._username[0] if self._username else "?"
