@@ -53,7 +53,7 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
     def _get_device_lock(self) -> asyncio.Lock:
         """Return (creating if needed) the asyncio.Lock for this device."""
         bucket = self.hass.data.setdefault(DOMAIN, {}).setdefault(
-            self.coordinator._entry.entry_id, {}
+            self.coordinator.entry_id, {}
         )
         locks: dict[str, asyncio.Lock] = bucket.setdefault("device_locks", {})
         if self._mac not in locks:
@@ -67,7 +67,7 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
     def _optimistic_set(self, key: str, value: Any) -> None:
         """Store a locally-set value with a TTL timestamp."""
         bucket = self.hass.data.setdefault(DOMAIN, {}).setdefault(
-            self.coordinator._entry.entry_id, {}
+            self.coordinator.entry_id, {}
         )
         overlays: dict[str, dict[str, Any]] = bucket.setdefault("optimistic", {})
         device_overlays = overlays.setdefault(self._mac, {})
@@ -76,7 +76,7 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
     def _optimistic_get(self, key: str, fallback: Any) -> Any:
         """Return the optimistic value if still fresh, else fallback."""
         bucket = self.hass.data.get(DOMAIN, {}).get(
-            self.coordinator._entry.entry_id, {}
+            self.coordinator.entry_id, {}
         )
         overlays = bucket.get("optimistic", {}).get(self._mac, {})
         entry = overlays.get(key)
@@ -87,7 +87,7 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
     def _optimistic_clear(self, key: str) -> None:
         """Expire an optimistic overlay immediately."""
         bucket = self.hass.data.get(DOMAIN, {}).get(
-            self.coordinator._entry.entry_id, {}
+            self.coordinator.entry_id, {}
         )
         overlays = bucket.get("optimistic", {}).get(self._mac, {})
         overlays.pop(key, None)
@@ -102,15 +102,14 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
         Multiple calls within the window collapse into a single refresh.
         """
         bucket = self.hass.data.setdefault(DOMAIN, {}).setdefault(
-            self.coordinator._entry.entry_id, {}
+            self.coordinator.entry_id, {}
         )
         existing: asyncio.Task | None = bucket.get("pending_refresh")
         if existing and not existing.done():
             return
 
         async def _do_refresh() -> None:
-            import asyncio as _asyncio
-            await _asyncio.sleep(POST_WRITE_REFRESH_DELAY_SEC)
+            await asyncio.sleep(POST_WRITE_REFRESH_DELAY_SEC)
             await self.coordinator.async_request_refresh()
 
         bucket["pending_refresh"] = self.hass.async_create_task(_do_refresh())

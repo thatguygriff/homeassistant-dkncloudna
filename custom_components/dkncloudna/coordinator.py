@@ -43,6 +43,7 @@ class DknCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         )
         self.client = client
         self._entry = entry
+        self.entry_id = entry.entry_id
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         """Fetch all installations and flatten into {mac: device_dict}."""
