@@ -235,7 +235,13 @@ class DknCloudNaClient:
             payload = {"mac": mac, "property": property_name, "value": value}
             LOGGER.debug("DKN socket send %s %s", namespace, payload)
             try:
-                await socket.emit("create-machine-event", payload, namespace=namespace)
+                ack = await socket.call(
+                    "create-machine-event",
+                    payload,
+                    namespace=namespace,
+                    timeout=REQUEST_TIMEOUT,
+                )
+                LOGGER.debug("DKN socket ack %s %s", namespace, ack)
             except Exception as err:  # noqa: BLE001
                 raise DknConnectionError(str(err) or type(err).__name__) from err
 

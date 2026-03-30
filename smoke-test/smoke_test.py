@@ -209,6 +209,7 @@ async def _main() -> None:
         "login": False,
         "discovery": None,
         "socket_connect": False,
+        "write_debug": {},
         "writes": {},
     }
 
@@ -232,8 +233,11 @@ async def _main() -> None:
                 for device in installation.get("devices", []):
                     device_mac = str(device.get("mac") or "").strip().lower()
                     if device_mac == mac:
-                        current_device = dict(device)
-                        current_device["_installation_id"] = installation_id
+                        current_device = {
+                            **current_device,
+                            **dict(device),
+                            "_installation_id": installation_id,
+                        }
                         return current_device
             raise RuntimeError("Selected device disappeared during smoke test")
 
@@ -270,6 +274,7 @@ async def _main() -> None:
 
         installation_id = str(selected_installation.get("_id") or "")
         mac = str(selected_device.get("mac") or "").strip().lower()
+        command_mac = str(selected_device.get("mac") or "").strip() or mac.upper()
         current_device = dict(selected_device)
         current_device["_installation_id"] = installation_id
 
@@ -301,6 +306,7 @@ async def _main() -> None:
             "installation_id": installation_id,
             "device_name": selected_device.get("name"),
             "mac": mac,
+            "command_mac": command_mac,
             **_effective_state(current_device),
         }
 
@@ -322,9 +328,24 @@ async def _main() -> None:
                     return True
             return False
 
+        async def collect_socket_deltas(window: float = 5.0) -> list[dict[str, Any]]:
+            deltas: list[dict[str, Any]] = []
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + window
+            while loop.time() < deadline:
+                remaining = max(0.05, deadline - loop.time())
+                try:
+                    payload = await asyncio.wait_for(
+                        queue.get(), timeout=min(0.5, remaining)
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                deltas.append(payload)
+            return deltas
+
         async def send(property_name: str, value: Any) -> None:
             await client.async_send_machine_event(
-                installation_id, mac, property_name, value
+                installation_id, command_mac, property_name, value
             )
 
         async def send_and_verify(
@@ -332,8 +353,18 @@ async def _main() -> None:
         ) -> bool | str:
             if not _supports_write_verification(current_device, property_name):
                 return "unsupported_by_payload"
+            baseline = current_device.get(property_name)
             await send(property_name, value)
-            return await wait_for_property(property_name, value, timeout=timeout)
+            verified = await wait_for_property(property_name, value, timeout=timeout)
+            refreshed = await fetch_current_device()
+            results["write_debug"][property_name] = {
+                "requested": value,
+                "before": baseline,
+                "after": refreshed.get(property_name),
+                "acknowledged": True,
+                "socket_deltas": await collect_socket_deltas(),
+            }
+            return verified
 
         restore_actions: list[tuple[str, Any]] = []
         try:
@@ -367,13 +398,18 @@ async def _main() -> None:
             else:
                 original_temp = current_device.get(property_name)
                 low, high = _temp_bounds(current_device, mode)
-                if original_temp is None or low is None or high is None:
-                    results["writes"]["temperature"] = "skipped_missing_bounds"
+                if original_temp is None:
+                    results["writes"]["temperature"] = "skipped_missing_setpoint"
                 else:
                     test_temp = original_temp
-                    if original_temp < high:
+                    if low is not None and high is not None:
+                        if original_temp < high:
+                            test_temp = original_temp + 1
+                        elif original_temp > low:
+                            test_temp = original_temp - 1
+                    elif original_temp < 31:
                         test_temp = original_temp + 1
-                    elif original_temp > low:
+                    elif original_temp > 17:
                         test_temp = original_temp - 1
                     if test_temp == original_temp:
                         results["writes"]["temperature"] = "skipped_no_room"

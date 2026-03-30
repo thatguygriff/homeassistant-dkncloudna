@@ -182,7 +182,7 @@ class DknClimateEntity(DknEntity, ClimateEntity):
             try:
                 if hvac_mode == HVACMode.OFF:
                     await self.coordinator.client.async_send_machine_event(
-                        installation_id, self._mac, "power", False
+                        installation_id, self._command_mac, "power", False
                     )
                     self._optimistic_set("power", False)
                     self._optimistic_set("hvac_mode", HVACMode.OFF)
@@ -191,10 +191,10 @@ class DknClimateEntity(DknEntity, ClimateEntity):
                     if mode is None:
                         raise HomeAssistantError(f"Unsupported HVAC mode: {hvac_mode}")
                     await self.coordinator.client.async_send_machine_event(
-                        installation_id, self._mac, "power", True
+                        installation_id, self._command_mac, "power", True
                     )
                     await self.coordinator.client.async_send_machine_event(
-                        installation_id, self._mac, "mode", mode
+                        installation_id, self._command_mac, "mode", mode
                     )
                     self._optimistic_set("power", True)
                     self._optimistic_set("hvac_mode", hvac_mode)
@@ -226,7 +226,7 @@ class DknClimateEntity(DknEntity, ClimateEntity):
         async with self._get_device_lock():
             try:
                 await self.coordinator.client.async_send_machine_event(
-                    installation_id, self._mac, property_name, device_temp
+                    installation_id, self._command_mac, property_name, device_temp
                 )
             except Exception as err:  # noqa: BLE001
                 raise HomeAssistantError(f"Failed to set temperature: {err}") from err
@@ -246,7 +246,7 @@ class DknClimateEntity(DknEntity, ClimateEntity):
         async with self._get_device_lock():
             try:
                 await self.coordinator.client.async_send_machine_event(
-                    installation_id, self._mac, "speed_state", speed
+                    installation_id, self._command_mac, "speed_state", speed
                 )
             except Exception as err:  # noqa: BLE001
                 raise HomeAssistantError(f"Failed to set fan mode: {err}") from err
@@ -266,7 +266,7 @@ class DknClimateEntity(DknEntity, ClimateEntity):
         async with self._get_device_lock():
             try:
                 await self.coordinator.client.async_send_machine_event(
-                    installation_id, self._mac, "slats_vertical_1", slat
+                    installation_id, self._command_mac, "slats_vertical_1", slat
                 )
             except Exception as err:  # noqa: BLE001
                 raise HomeAssistantError(f"Failed to set swing mode: {err}") from err

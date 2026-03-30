@@ -9,7 +9,12 @@ from typing import Any
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER, OPTIMISTIC_TTL_SEC, POST_WRITE_REFRESH_DELAY_SEC
+from .const import (
+    DOMAIN,
+    MANUFACTURER,
+    OPTIMISTIC_TTL_SEC,
+    POST_WRITE_REFRESH_DELAY_SEC,
+)
 from .coordinator import DknCoordinator
 
 
@@ -34,6 +39,14 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
     def _device_data(self) -> dict[str, Any]:
         """Return raw device dict from coordinator, or empty dict if unavailable."""
         return (self.coordinator.data or {}).get(self._mac, {})
+
+    @property
+    def _command_mac(self) -> str:
+        """Return the device MAC in the form expected by the cloud API."""
+        mac = self._device_data.get("mac")
+        if isinstance(mac, str) and mac.strip():
+            return mac.strip()
+        return self._mac.upper()
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -71,13 +84,14 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
         )
         overlays: dict[str, dict[str, Any]] = bucket.setdefault("optimistic", {})
         device_overlays = overlays.setdefault(self._mac, {})
-        device_overlays[key] = {"value": value, "expires": time.monotonic() + OPTIMISTIC_TTL_SEC}
+        device_overlays[key] = {
+            "value": value,
+            "expires": time.monotonic() + OPTIMISTIC_TTL_SEC,
+        }
 
     def _optimistic_get(self, key: str, fallback: Any) -> Any:
         """Return the optimistic value if still fresh, else fallback."""
-        bucket = self.hass.data.get(DOMAIN, {}).get(
-            self.coordinator.entry_id, {}
-        )
+        bucket = self.hass.data.get(DOMAIN, {}).get(self.coordinator.entry_id, {})
         overlays = bucket.get("optimistic", {}).get(self._mac, {})
         entry = overlays.get(key)
         if entry and time.monotonic() < entry["expires"]:
@@ -86,9 +100,7 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
 
     def _optimistic_clear(self, key: str) -> None:
         """Expire an optimistic overlay immediately."""
-        bucket = self.hass.data.get(DOMAIN, {}).get(
-            self.coordinator.entry_id, {}
-        )
+        bucket = self.hass.data.get(DOMAIN, {}).get(self.coordinator.entry_id, {})
         overlays = bucket.get("optimistic", {}).get(self._mac, {})
         overlays.pop(key, None)
 
