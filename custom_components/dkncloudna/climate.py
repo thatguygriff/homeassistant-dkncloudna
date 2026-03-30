@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from homeassistant.components.climate import (
+    HVACAction,
     ClimateEntity,
     ClimateEntityFeature,
     HVACMode,
@@ -14,7 +15,6 @@ from homeassistant.const import ATTR_TEMPERATURE, PRECISION_WHOLE, UnitOfTempera
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.util.unit_conversion import TemperatureConverter
 
 from .const import (
     DEVICE_MODE_AUTO,
@@ -29,7 +29,16 @@ from .const import (
     SPEED_80,
     SPEED_100,
     SPEED_AUTO,
-    TEMP_FAHRENHEIT,
+)
+from .model import (
+    available_fan_speeds,
+    current_temperature as model_current_temperature,
+    inferred_hvac_action,
+    requested_mode,
+    supports_swing,
+    target_temperature as model_target_temperature,
+    target_temperature_key,
+    to_device_temperature,
 )
 from .coordinator import DknCoordinator
 from .entity import DknEntity
@@ -99,9 +108,11 @@ class DknClimateEntity(DknEntity, ClimateEntity):
         features = ClimateEntityFeature.TURN_ON | ClimateEntityFeature.TURN_OFF
         if self.hvac_mode not in _NO_TARGET_TEMP_MODES:
             features |= ClimateEntityFeature.TARGET_TEMPERATURE
-        return (
-            features | ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.SWING_MODE
-        )
+        if available_fan_speeds(self._device_data):
+            features |= ClimateEntityFeature.FAN_MODE
+        if supports_swing(self._device_data):
+            features |= ClimateEntityFeature.SWING_MODE
+        return features
 
     @property
     def hvac_mode(self) -> HVACMode:
@@ -112,31 +123,39 @@ class DknClimateEntity(DknEntity, ClimateEntity):
         optimistic_mode = self._optimistic_get("hvac_mode", None)
         if optimistic_mode is not None:
             return optimistic_mode
-        mode_int = data.get("real_mode") or data.get("mode", DEVICE_MODE_AUTO)
+        mode_int = requested_mode(data) or DEVICE_MODE_AUTO
         return _MODE_TO_HVAC.get(int(mode_int), HVACMode.AUTO)
 
     @property
+    def hvac_action(self) -> HVACAction | None:
+        if self.hvac_mode == HVACMode.OFF:
+            return HVACAction.OFF
+
+        action = inferred_hvac_action(self._device_data)
+        if action == "heating":
+            return HVACAction.HEATING
+        if action == "cooling":
+            return HVACAction.COOLING
+        if action == "idle":
+            return HVACAction.IDLE
+        if action == "fan":
+            return HVACAction.FAN
+        if action == "drying":
+            return HVACAction.DRYING
+        return None
+
+    @property
     def current_temperature(self) -> float | None:
-        value = self._device_data.get("work_temp")
-        if value is None:
-            return None
-        return self._from_device_temperature(float(value))
+        return model_current_temperature(self._device_data)
 
     @property
     def target_temperature(self) -> float | None:
         mode = self.hvac_mode
         if mode in _NO_TARGET_TEMP_MODES:
             return None
-        data = self._device_data
-        if mode == HVACMode.HEAT:
-            value = data.get("setpoint_air_heat")
-        elif mode == HVACMode.COOL:
-            value = data.get("setpoint_air_cool")
-        else:
-            value = data.get("setpoint_air_auto")
-        if value is None:
+        fallback = model_target_temperature(self._device_data)
+        if fallback is None:
             return None
-        fallback = self._from_device_temperature(float(value))
         return self._optimistic_get("target_temp", fallback)
 
     @property
@@ -220,6 +239,8 @@ class DknClimateEntity(DknEntity, ClimateEntity):
         speed = _FAN_TO_SPEED.get(fan_mode)
         if speed is None:
             raise HomeAssistantError(f"Unsupported fan mode: {fan_mode}")
+        if speed not in available_fan_speeds(self._device_data):
+            raise HomeAssistantError(f"Fan mode not supported by device: {fan_mode}")
 
         installation_id = self._installation_id
         async with self._get_device_lock():
@@ -237,6 +258,8 @@ class DknClimateEntity(DknEntity, ClimateEntity):
     async def async_set_swing_mode(self, swing_mode: str) -> None:
         if swing_mode not in {"off", "swing"}:
             raise HomeAssistantError(f"Unsupported swing mode: {swing_mode}")
+        if not supports_swing(self._device_data):
+            raise HomeAssistantError("Swing mode not supported by device")
 
         installation_id = self._installation_id
         slat = 9 if swing_mode == "swing" else 0
@@ -266,32 +289,21 @@ class DknClimateEntity(DknEntity, ClimateEntity):
         return installation_id
 
     def _temperature_property_for_mode(self, hvac_mode: HVACMode) -> str:
-        if hvac_mode == HVACMode.HEAT:
-            return "setpoint_air_heat"
-        if hvac_mode == HVACMode.COOL:
-            return "setpoint_air_cool"
         if hvac_mode not in {HVACMode.AUTO, HVACMode.HEAT, HVACMode.COOL}:
             raise HomeAssistantError(
                 f"Target temperature is not supported in {hvac_mode} mode"
             )
-        return "setpoint_air_auto"
+        requested = {
+            HVACMode.AUTO: DEVICE_MODE_AUTO,
+            HVACMode.COOL: DEVICE_MODE_COOL,
+            HVACMode.HEAT: DEVICE_MODE_HEAT,
+        }[hvac_mode]
+        key = target_temperature_key(requested)
+        if key is None:
+            raise HomeAssistantError(
+                f"Target temperature is not supported in {hvac_mode} mode"
+            )
+        return key
 
     def _to_device_temperature(self, temperature_c: float) -> float | int:
-        if int(self._device_data.get("units", 0)) != TEMP_FAHRENHEIT:
-            return temperature_c
-        fahrenheit = TemperatureConverter.convert(
-            temperature_c,
-            UnitOfTemperature.CELSIUS,
-            UnitOfTemperature.FAHRENHEIT,
-        )
-        return round(fahrenheit)
-
-    def _from_device_temperature(self, value: float) -> float:
-        if int(self._device_data.get("units", 0)) != TEMP_FAHRENHEIT:
-            return value
-        celsius = TemperatureConverter.convert(
-            value,
-            UnitOfTemperature.FAHRENHEIT,
-            UnitOfTemperature.CELSIUS,
-        )
-        return round(celsius, 1)
+        return to_device_temperature(temperature_c, self._device_data.get("units"))

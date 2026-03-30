@@ -97,21 +97,57 @@ def _effective_state(device: dict[str, Any]) -> dict[str, Any]:
     is_connected = _bool_or_none(device.get("isConnected"))
     machine_ready = _bool_or_none(device.get("machineready"))
 
-    hvac_state = "off"
-    active_mode = real_mode if real_mode is not None else mode
+    hvac_mode = "off"
+    hvac_action = "off"
     if power:
-        if active_mode == 3:
-            hvac_state = "heating"
-        elif active_mode == 2:
-            hvac_state = "cooling"
-        elif active_mode == 1:
-            hvac_state = "auto"
-        elif active_mode == 4:
-            hvac_state = "fan_only"
-        elif active_mode == 5:
-            hvac_state = "dry"
+        if mode == 3:
+            hvac_mode = "heat"
+        elif mode == 2:
+            hvac_mode = "cool"
+        elif mode == 1:
+            hvac_mode = "auto"
+        elif mode == 4:
+            hvac_mode = "fan_only"
+        elif mode == 5:
+            hvac_mode = "dry"
         else:
-            hvac_state = "on"
+            hvac_mode = "on"
+
+        current = device.get("work_temp")
+        target = None
+        if mode == 3:
+            target = device.get("setpoint_air_heat")
+        elif mode == 2:
+            target = device.get("setpoint_air_cool")
+        elif mode == 1:
+            target = device.get("setpoint_air_auto")
+
+        if mode == 3:
+            if current is not None and target is not None and current < target:
+                hvac_action = "heating"
+            else:
+                hvac_action = "idle"
+        elif mode == 2:
+            if current is not None and target is not None and current > target:
+                hvac_action = "cooling"
+            else:
+                hvac_action = "idle"
+        elif mode == 1:
+            if current is not None and target is not None:
+                if current < target:
+                    hvac_action = "heating"
+                elif current > target:
+                    hvac_action = "cooling"
+                else:
+                    hvac_action = "idle"
+            else:
+                hvac_action = "idle"
+        elif mode == 4:
+            hvac_action = "fan"
+        elif mode == 5:
+            hvac_action = "drying"
+        else:
+            hvac_action = "on"
 
     return {
         "connected": is_connected,
@@ -120,7 +156,8 @@ def _effective_state(device: dict[str, Any]) -> dict[str, Any]:
         "mode": mode,
         "real_mode": real_mode,
         "units": units,
-        "hvac_state": hvac_state,
+        "hvac_mode": hvac_mode,
+        "hvac_action": hvac_action,
         "work_temp": device.get("work_temp"),
         "setpoint_air_auto": device.get("setpoint_air_auto"),
         "setpoint_air_cool": device.get("setpoint_air_cool"),
@@ -128,6 +165,19 @@ def _effective_state(device: dict[str, Any]) -> dict[str, Any]:
         "speed_state": _int_or_none(device.get("speed_state")),
         "slats_vertical_1": _int_or_none(device.get("slats_vertical_1")),
     }
+
+
+def _supports_write_verification(device: dict[str, Any], property_name: str) -> bool:
+    if property_name == "slats_vertical_1":
+        return "slats_vertical_1" in device or _int_or_none(
+            device.get("slats_vnum")
+        ) not in (None, 0)
+    if property_name == "speed_state":
+        available = device.get("speed_available")
+        return isinstance(available, list) and len(available) > 0
+    if property_name.startswith("setpoint_air_"):
+        return device.get(property_name) is not None
+    return True
 
 
 def _has_live_state(device: dict[str, Any]) -> bool:
@@ -277,6 +327,14 @@ async def _main() -> None:
                 installation_id, mac, property_name, value
             )
 
+        async def send_and_verify(
+            property_name: str, value: Any, timeout: float = 20.0
+        ) -> bool | str:
+            if not _supports_write_verification(current_device, property_name):
+                return "unsupported_by_payload"
+            await send(property_name, value)
+            return await wait_for_property(property_name, value, timeout=timeout)
+
         restore_actions: list[tuple[str, Any]] = []
         try:
             await send("power", current_device.get("power", False))
@@ -287,8 +345,7 @@ async def _main() -> None:
 
             original_swing = int(current_device.get("slats_vertical_1", 0) or 0)
             test_swing = 0 if original_swing == 9 else 9
-            await send("slats_vertical_1", test_swing)
-            results["writes"]["swing_toggle"] = await wait_for_property(
+            results["writes"]["swing_toggle"] = await send_and_verify(
                 "slats_vertical_1", test_swing
             )
             restore_actions.append(("slats_vertical_1", original_swing))
@@ -298,8 +355,7 @@ async def _main() -> None:
             if test_fan == original_fan:
                 results["writes"]["fan_speed"] = "skipped_no_alternate"
             else:
-                await send("speed_state", test_fan)
-                results["writes"]["fan_speed"] = await wait_for_property(
+                results["writes"]["fan_speed"] = await send_and_verify(
                     "speed_state", test_fan
                 )
                 restore_actions.append(("speed_state", original_fan))
@@ -322,8 +378,7 @@ async def _main() -> None:
                     if test_temp == original_temp:
                         results["writes"]["temperature"] = "skipped_no_room"
                     else:
-                        await send(property_name, test_temp)
-                        results["writes"]["temperature"] = await wait_for_property(
+                        results["writes"]["temperature"] = await send_and_verify(
                             property_name, test_temp
                         )
                         restore_actions.append((property_name, original_temp))

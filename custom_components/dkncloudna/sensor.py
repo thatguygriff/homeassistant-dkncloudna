@@ -20,11 +20,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import DOMAIN
 from .coordinator import DknCoordinator
 from .entity import DknEntity
+from .model import current_temperature, exterior_temperature
 
 
 @dataclass(frozen=True, kw_only=True)
 class DknSensorEntityDescription(SensorEntityDescription):
     """Extend SensorEntityDescription with a device_data key."""
+
     data_key: str = ""
 
 
@@ -95,4 +97,8 @@ class DknSensorEntity(DknEntity, SensorEntity):
 
     @property
     def native_value(self) -> Any:
+        if self.entity_description.data_key == "work_temp":
+            return current_temperature(self._device_data)
+        if self.entity_description.data_key == "ext_temp":
+            return exterior_temperature(self._device_data)
         return self._device_data.get(self.entity_description.data_key)
