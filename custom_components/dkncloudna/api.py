@@ -163,7 +163,6 @@ class DknCloudNaClient:
             raise DknAuthError("Missing access token")
 
         sio = socketio.AsyncClient(
-            handle_sigint=False,
             logger=False,
             engineio_logger=False,
             reconnection=True,
@@ -183,7 +182,6 @@ class DknCloudNaClient:
                 transports=["polling", "websocket"],
                 socketio_path=API_SOCKET_PATH.strip("/"),
                 namespaces=namespaces,
-                wait_timeout=REQUEST_TIMEOUT,
             )
         except Exception as err:  # noqa: BLE001
             LOGGER.debug("DKN socket connect failed: %s", err)

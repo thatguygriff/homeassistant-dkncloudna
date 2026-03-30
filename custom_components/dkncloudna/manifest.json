@@ -7,6 +7,6 @@
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/lavoiesl/homeassistant-dkncloudna/issues",
-  "requirements": ["python-socketio>=5.11.4,<6"],
+  "requirements": ["python-socketio>=4.6.1,<5"],
   "version": "0.1.0"
 }
