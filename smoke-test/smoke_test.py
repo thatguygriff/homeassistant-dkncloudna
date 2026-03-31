@@ -58,6 +58,26 @@ def _temp_property(mode: int) -> str | None:
     return None
 
 
+def _writable_temp_property(device: dict[str, Any]) -> str | None:
+    candidates: list[str] = []
+    for mode in (device.get("real_mode"), device.get("mode"), 1):
+        if mode == 1:
+            key = "setpoint_air_auto"
+        elif mode == 2:
+            key = "setpoint_air_cool"
+        elif mode == 3:
+            key = "setpoint_air_heat"
+        else:
+            key = None
+        if key is not None and key not in candidates:
+            candidates.append(key)
+
+    for key in candidates:
+        if device.get(key) is not None:
+            return key
+    return candidates[0] if candidates else None
+
+
 def _temp_bounds(device: dict[str, Any], mode: int) -> tuple[Any, Any]:
     if mode == 1:
         return device.get("range_sp_auto_air_min"), device.get("range_sp_auto_air_max")
@@ -505,7 +525,9 @@ async def _main() -> None:
                 restore_actions.append(("speed_state", original_fan))
 
             mode = int(current_device.get("mode", 1) or 1)
-            property_name = _temp_property(mode)
+            property_name = _writable_temp_property(current_device) or _temp_property(
+                mode
+            )
             if property_name is None:
                 results["writes"]["temperature"] = "skipped_unsupported_mode"
             else:

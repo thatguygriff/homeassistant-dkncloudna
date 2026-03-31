@@ -39,6 +39,7 @@ from .model import (
     supports_swing,
     target_temperature as model_target_temperature,
     target_temperature_key,
+    writable_target_temperature_key,
     to_device_temperature,
 )
 from .coordinator import DknCoordinator
@@ -190,10 +191,16 @@ class DknClimateEntity(DknEntity, ClimateEntity):
                     )
                     self._optimistic_set("power", False)
                     self._optimistic_set("hvac_mode", HVACMode.OFF)
-                    await self._wait_for_device_value("power", False)
                 else:
-                    await self._ensure_power_on()
-                    await self._ensure_mode_synced(hvac_mode)
+                    mode = _HVAC_TO_MODE.get(hvac_mode)
+                    if mode is None:
+                        raise HomeAssistantError(f"Unsupported HVAC mode: {hvac_mode}")
+                    await self.coordinator.client.async_send_machine_event(
+                        installation_id, self._command_mac, "power", True
+                    )
+                    await self.coordinator.client.async_send_machine_event(
+                        installation_id, self._command_mac, "mode", mode
+                    )
                     self._optimistic_set("power", True)
                     self._optimistic_set("hvac_mode", hvac_mode)
             except Exception as err:  # noqa: BLE001
@@ -218,28 +225,27 @@ class DknClimateEntity(DknEntity, ClimateEntity):
             )
 
         installation_id = self._installation_id
-        property_name = self._temperature_property_for_mode(target_mode)
+        property_name = self._writable_temperature_property_for_mode(target_mode)
         device_temp = self._to_device_temperature(float(temperature))
 
         async with self._get_device_lock():
             try:
-                await self._ensure_power_on()
-                await self._ensure_mode_synced(target_mode)
+                requested_mode_code = _HVAC_TO_MODE.get(target_mode)
+                if (
+                    requested_mode_code is not None
+                    and self._device_data.get("mode") != requested_mode_code
+                ):
+                    await self.coordinator.client.async_send_machine_event(
+                        installation_id, self._command_mac, "power", True
+                    )
+                    await self.coordinator.client.async_send_machine_event(
+                        installation_id, self._command_mac, "mode", requested_mode_code
+                    )
+                    self._optimistic_set("power", True)
+                    self._optimistic_set("hvac_mode", target_mode)
                 await self.coordinator.client.async_send_machine_event(
                     installation_id, self._command_mac, property_name, device_temp
                 )
-                if not await self._wait_for_device_value(property_name, device_temp):
-                    await self.coordinator.async_request_refresh()
-                    await self._ensure_mode_synced(target_mode)
-                    await self.coordinator.client.async_send_machine_event(
-                        installation_id, self._command_mac, property_name, device_temp
-                    )
-                    if not await self._wait_for_device_value(
-                        property_name, device_temp
-                    ):
-                        raise HomeAssistantError(
-                            f"Device temperature did not sync to {temperature}"
-                        )
             except Exception as err:  # noqa: BLE001
                 raise HomeAssistantError(f"Failed to set temperature: {err}") from err
 
@@ -257,7 +263,6 @@ class DknClimateEntity(DknEntity, ClimateEntity):
         installation_id = self._installation_id
         async with self._get_device_lock():
             try:
-                await self._ensure_power_on()
                 await self.coordinator.client.async_send_machine_event(
                     installation_id, self._command_mac, "speed_state", speed
                 )
@@ -278,7 +283,6 @@ class DknClimateEntity(DknEntity, ClimateEntity):
         slat = 9 if swing_mode == "swing" else 0
         async with self._get_device_lock():
             try:
-                await self._ensure_power_on()
                 await self.coordinator.client.async_send_machine_event(
                     installation_id, self._command_mac, "slats_vertical_1", slat
                 )
@@ -319,48 +323,11 @@ class DknClimateEntity(DknEntity, ClimateEntity):
             )
         return key
 
+    def _writable_temperature_property_for_mode(self, hvac_mode: HVACMode) -> str:
+        preferred = writable_target_temperature_key(self._device_data)
+        if preferred is not None:
+            return preferred
+        return self._temperature_property_for_mode(hvac_mode)
+
     def _to_device_temperature(self, temperature_c: float) -> float | int:
         return to_device_temperature(temperature_c, self._device_data.get("units"))
-
-    async def _ensure_mode_synced(self, hvac_mode: HVACMode) -> int:
-        """Ensure the device mode is synced before dependent writes."""
-        mode = _HVAC_TO_MODE.get(hvac_mode)
-        if mode is None:
-            raise HomeAssistantError(f"Unsupported HVAC mode: {hvac_mode}")
-
-        await self._ensure_power_on()
-
-        if self._device_data.get("mode") == mode:
-            return mode
-
-        installation_id = self._installation_id
-        await self.coordinator.client.async_send_machine_event(
-            installation_id, self._command_mac, "mode", mode
-        )
-        self._optimistic_set("hvac_mode", hvac_mode)
-        if not await self._wait_for_device_value("mode", mode):
-            await self.coordinator.async_request_refresh()
-            await self.coordinator.client.async_send_machine_event(
-                installation_id, self._command_mac, "mode", mode
-            )
-            if not await self._wait_for_device_value("mode", mode):
-                raise HomeAssistantError(f"Device mode did not sync to {hvac_mode}")
-        return mode
-
-    async def _ensure_power_on(self) -> None:
-        """Ensure the device is powered on before sending dependent commands."""
-        if self._device_data.get("power") is True:
-            return
-
-        installation_id = self._installation_id
-        await self.coordinator.client.async_send_machine_event(
-            installation_id, self._command_mac, "power", True
-        )
-        self._optimistic_set("power", True)
-        if not await self._wait_for_device_value("power", True):
-            await self.coordinator.async_request_refresh()
-            await self.coordinator.client.async_send_machine_event(
-                installation_id, self._command_mac, "power", True
-            )
-            if not await self._wait_for_device_value("power", True):
-                raise HomeAssistantError("Device power did not sync to on")

@@ -92,6 +92,21 @@ def target_temperature(data: dict[str, Any]) -> float | None:
     return to_celsius(data.get(key), data.get("units"))
 
 
+def writable_target_temperature_key(data: dict[str, Any]) -> str | None:
+    """Return the setpoint key most likely to be writable for the current state."""
+    candidates: list[str] = []
+    for mode in (live_mode(data), requested_mode(data), DEVICE_MODE_AUTO):
+        key = target_temperature_key(mode)
+        if key is not None and key not in candidates:
+            candidates.append(key)
+
+    for key in candidates:
+        if data.get(key) is not None:
+            return key
+
+    return candidates[0] if candidates else None
+
+
 def inferred_hvac_action(data: dict[str, Any]) -> str:
     """Infer the active HVAC action from requested mode and temperatures."""
     power = as_bool(data.get("power"))

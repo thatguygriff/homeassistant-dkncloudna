@@ -238,12 +238,8 @@ class DknCloudNaClient:
             payload = {"mac": mac, "property": property_name, "value": value}
             LOGGER.debug("DKN socket send %s %s", namespace, payload)
             try:
-                ack = await socket.call(
-                    "create-machine-event",
-                    payload,
-                    namespace=namespace,
-                    timeout=REQUEST_TIMEOUT,
-                )
+                ack = None
+                await socket.emit("create-machine-event", payload, namespace=namespace)
                 self._last_command_ack = {
                     "namespace": namespace,
                     "payload": payload,
