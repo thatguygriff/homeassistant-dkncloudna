@@ -75,6 +75,17 @@ def _next_fan_speed(current: int) -> int:
     return speeds[(speeds.index(current) + 1) % len(speeds)]
 
 
+def _next_available_fan_speed(device: dict[str, Any], current: int) -> int:
+    available = device.get("speed_available")
+    if isinstance(available, list):
+        speeds = [int(value) for value in available if isinstance(value, int)]
+        if current in speeds and len(speeds) > 1:
+            return speeds[(speeds.index(current) + 1) % len(speeds)]
+        if speeds:
+            return speeds[0]
+    return _next_fan_speed(current)
+
+
 def _bool_or_none(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -208,6 +219,7 @@ async def _main() -> None:
     results: dict[str, Any] = {
         "login": False,
         "discovery": None,
+        "probes": {},
         "socket_connect": False,
         "write_debug": {},
         "writes": {},
@@ -348,6 +360,25 @@ async def _main() -> None:
                 installation_id, command_mac, property_name, value
             )
 
+        async def ensure_mode(mode_value: int, timeout: float = 20.0) -> bool:
+            if current_device.get("mode") == mode_value:
+                return True
+            await send("mode", mode_value)
+            return await wait_for_property("mode", mode_value, timeout=timeout)
+
+        async def ensure_power_on(timeout: float = 20.0) -> bool:
+            if current_device.get("power") is True:
+                return True
+            await send("power", True)
+            return await wait_for_property("power", True, timeout=timeout)
+
+        async def recover_known_good_state() -> dict[str, Any]:
+            recovery = {"power_on": False, "heat_mode": False}
+            recovery["power_on"] = await ensure_power_on()
+            if recovery["power_on"]:
+                recovery["heat_mode"] = await ensure_mode(3)
+            return recovery
+
         async def send_and_verify(
             property_name: str, value: Any, timeout: float = 20.0
         ) -> bool | str:
@@ -357,17 +388,99 @@ async def _main() -> None:
             await send(property_name, value)
             verified = await wait_for_property(property_name, value, timeout=timeout)
             refreshed = await fetch_current_device()
+            command_debug = client.pop_last_command_debug() or {}
             results["write_debug"][property_name] = {
                 "requested": value,
                 "before": baseline,
                 "after": refreshed.get(property_name),
                 "acknowledged": True,
                 "socket_deltas": await collect_socket_deltas(),
+                **command_debug,
             }
             return verified
 
+        async def probe_setpoint_keys() -> dict[str, Any]:
+            mode = int(current_device.get("mode", 1) or 1)
+            original_values = {
+                key: current_device.get(key)
+                for key in (
+                    "setpoint_air_auto",
+                    "setpoint_air_cool",
+                    "setpoint_air_heat",
+                )
+            }
+            probe_results: dict[str, Any] = {
+                "mode": mode,
+                "original": original_values,
+                "attempts": {},
+            }
+
+            target_key = _temp_property(mode)
+            if target_key is None or original_values.get(target_key) is None:
+                probe_results["status"] = "skipped_missing_target"
+                return probe_results
+
+            original_value = original_values[target_key]
+            test_value = (
+                original_value + 1 if original_value < 31 else original_value - 1
+            )
+            if test_value == original_value:
+                probe_results["status"] = "skipped_no_room"
+                return probe_results
+
+            for key in ("setpoint_air_auto", "setpoint_air_cool", "setpoint_air_heat"):
+                if current_device.get(key) is None:
+                    probe_results["attempts"][key] = "missing"
+                    continue
+                await send(key, test_value)
+                accepted = await wait_for_property(key, test_value, timeout=8.0)
+                refreshed = await fetch_current_device()
+                probe_results["attempts"][key] = {
+                    "requested": test_value,
+                    "accepted": accepted,
+                    "after": refreshed.get(key),
+                    "command_debug": client.pop_last_command_debug() or {},
+                }
+                await send(key, original_values[key])
+                await wait_for_property(key, original_values[key], timeout=8.0)
+
+            probe_results["status"] = "completed"
+            return probe_results
+
+        async def probe_mode_transitions() -> dict[str, Any]:
+            original_mode = int(current_device.get("mode", 1) or 1)
+            original_power = bool(current_device.get("power", False))
+            attempts: dict[str, Any] = {}
+
+            for label, value in (("auto", 1), ("cool", 2), ("heat", 3), ("fan", 4)):
+                await send("mode", value)
+                accepted = await wait_for_property("mode", value, timeout=8.0)
+                refreshed = await fetch_current_device()
+                attempts[label] = {
+                    "requested": value,
+                    "accepted": accepted,
+                    "after": refreshed.get("mode"),
+                    "power": refreshed.get("power"),
+                    "command_debug": client.pop_last_command_debug() or {},
+                }
+
+            await send("mode", original_mode)
+            await wait_for_property("mode", original_mode, timeout=8.0)
+            if not original_power:
+                await send("power", False)
+                await wait_for_property("power", False, timeout=8.0)
+
+            return {
+                "original_mode": original_mode,
+                "attempts": attempts,
+            }
+
         restore_actions: list[tuple[str, Any]] = []
         try:
+            results["probes"]["recovery"] = await recover_known_good_state()
+            results["probes"]["setpoint_keys"] = await probe_setpoint_keys()
+            results["probes"]["mode_transitions"] = await probe_mode_transitions()
+
             await send("power", current_device.get("power", False))
             results["writes"]["power_emit"] = "sent_same_value"
 
@@ -382,7 +495,7 @@ async def _main() -> None:
             restore_actions.append(("slats_vertical_1", original_swing))
 
             original_fan = int(current_device.get("speed_state", 0) or 0)
-            test_fan = _next_fan_speed(original_fan)
+            test_fan = _next_available_fan_speed(current_device, original_fan)
             if test_fan == original_fan:
                 results["writes"]["fan_speed"] = "skipped_no_alternate"
             else:
@@ -414,6 +527,10 @@ async def _main() -> None:
                     if test_temp == original_temp:
                         results["writes"]["temperature"] = "skipped_no_room"
                     else:
+                        mode_ready = await ensure_mode(mode)
+                        results["write_debug"].setdefault(property_name, {})[
+                            "mode_ready"
+                        ] = mode_ready
                         results["writes"]["temperature"] = await send_and_verify(
                             property_name, test_temp
                         )

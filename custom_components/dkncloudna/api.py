@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -62,6 +63,8 @@ class DknCloudNaClient:
             Callable[[str, dict[str, Any]], Awaitable[None]] | None
         ) = None
         self._socket_refresh_callback: Callable[[], Awaitable[None]] | None = None
+        self._last_command_ack: dict[str, Any] | None = None
+        self._recent_socket_events: deque[dict[str, Any]] = deque(maxlen=20)
 
     def clear_password(self) -> None:
         """Discard password from memory after token exchange."""
@@ -241,9 +244,26 @@ class DknCloudNaClient:
                     namespace=namespace,
                     timeout=REQUEST_TIMEOUT,
                 )
+                self._last_command_ack = {
+                    "namespace": namespace,
+                    "payload": payload,
+                    "ack": ack,
+                }
                 LOGGER.debug("DKN socket ack %s %s", namespace, ack)
             except Exception as err:  # noqa: BLE001
                 raise DknConnectionError(str(err) or type(err).__name__) from err
+
+    def pop_last_command_debug(self) -> dict[str, Any] | None:
+        """Return and clear the latest command ack plus recent socket events."""
+        if self._last_command_ack is None and not self._recent_socket_events:
+            return None
+        debug = {
+            "last_command_ack": self._last_command_ack,
+            "recent_socket_events": list(self._recent_socket_events),
+        }
+        self._last_command_ack = None
+        self._recent_socket_events.clear()
+        return debug
 
     async def _disconnect_socket_locked(self) -> None:
         """Disconnect the Socket.IO client while holding the socket lock."""
@@ -281,14 +301,19 @@ class DknCloudNaClient:
 
         @sio.on("control-new-device", namespace=API_USERS_NAMESPACE)
         async def _on_new_device(_: Any) -> None:
+            self._record_socket_event(API_USERS_NAMESPACE, "control-new-device", _)
             await self._request_socket_refresh()
 
         @sio.on("control-deleted-device", namespace=API_USERS_NAMESPACE)
         async def _on_deleted_device(_: Any) -> None:
+            self._record_socket_event(API_USERS_NAMESPACE, "control-deleted-device", _)
             await self._request_socket_refresh()
 
         @sio.on("control-deleted-installation", namespace=API_USERS_NAMESPACE)
         async def _on_deleted_installation(_: Any) -> None:
+            self._record_socket_event(
+                API_USERS_NAMESPACE, "control-deleted-installation", _
+            )
             await self._request_socket_refresh()
 
         for installation_id in installation_ids:
@@ -298,6 +323,7 @@ class DknCloudNaClient:
             async def _on_device_data(
                 message: Any, *, _namespace: str = namespace
             ) -> None:
+                self._record_socket_event(_namespace, "device-data", message)
                 if not isinstance(message, dict):
                     return
                 mac = str(message.get("mac") or "").strip().lower()
@@ -325,6 +351,12 @@ class DknCloudNaClient:
     def _installation_namespace(self, installation_id: str) -> str:
         """Return the Socket.IO namespace for one installation."""
         return f"/{installation_id}::dknUsa"
+
+    def _record_socket_event(self, namespace: str, event: str, payload: Any) -> None:
+        """Track recent socket events for write debugging."""
+        self._recent_socket_events.append(
+            {"namespace": namespace, "event": event, "payload": payload}
+        )
 
     async def _request(
         self,

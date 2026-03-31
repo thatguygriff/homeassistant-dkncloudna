@@ -132,6 +132,24 @@ def available_fan_speeds(data: dict[str, Any]) -> list[int]:
     return [SPEED_AUTO, SPEED_20, SPEED_40, SPEED_60, SPEED_80, SPEED_100]
 
 
+def fan_mode_labels(data: dict[str, Any]) -> list[str]:
+    """Return the supported HA fan mode labels for the device."""
+    mapping = {
+        SPEED_AUTO: "auto",
+        SPEED_20: "20%",
+        SPEED_40: "40%",
+        SPEED_60: "60%",
+        SPEED_80: "80%",
+        SPEED_100: "100%",
+    }
+    labels: list[str] = []
+    for speed in available_fan_speeds(data):
+        label = mapping.get(speed)
+        if label is not None:
+            labels.append(label)
+    return labels
+
+
 def supports_swing(data: dict[str, Any]) -> bool:
     """Return whether the device appears to support vertical swing control."""
     return "slats_vertical_1" in data or as_int(data.get("slats_vnum")) not in (None, 0)

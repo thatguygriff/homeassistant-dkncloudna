@@ -125,3 +125,22 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
             await self.coordinator.async_request_refresh()
 
         bucket["pending_refresh"] = self.hass.async_create_task(_do_refresh())
+
+    async def _wait_for_device_value(
+        self,
+        key: str,
+        expected: Any,
+        timeout: float = 10.0,
+        interval: float = 0.5,
+    ) -> bool:
+        """Wait for a device property to match the expected value."""
+        deadline = time.monotonic() + timeout
+        next_refresh = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            if self._device_data.get(key) == expected:
+                return True
+            if time.monotonic() >= next_refresh:
+                await self.coordinator.async_request_refresh()
+                next_refresh = time.monotonic() + 2.0
+            await asyncio.sleep(interval)
+        return self._device_data.get(key) == expected
