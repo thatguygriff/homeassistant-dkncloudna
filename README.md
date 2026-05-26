@@ -69,12 +69,18 @@ Each device exposes the following entities:
 
 ---
 
-## Known Limitations & Roadmap
+## How It Works
 
-- **Login and device discovery are implemented.** The integration authenticates against the DKN Cloud NA API and discovers configured devices.
-- **Device control is not yet implemented.** This release establishes the integration scaffolding and entity structure. Setting temperature, mode, fan speed, and swing will be implemented in a future release.
-- Real-time updates via Socket.IO are not used; the integration polls the cloud API on a configurable interval (default 60s).
-- Temperature units follow what the device reports; Fahrenheit devices are converted to Celsius for Home Assistant.
+- **Authentication.** The integration exchanges your DKN Cloud NA credentials for access + refresh tokens on first setup, then uses the refresh token to keep the session alive. Refreshed tokens are persisted to the config entry so they survive restarts.
+- **Device discovery and polling.** All installations and their devices are fetched from the REST API on a configurable interval (default 60 seconds). The poll establishes the device list and acts as a heartbeat against the cloud.
+- **Live updates via Socket.IO.** While the integration is running, it maintains a Socket.IO connection to dkncloudna.com and applies `device-data` events to entity state in near real-time — no waiting for the next poll cycle.
+- **Control via Socket.IO.** Mode, target temperature, fan speed, and swing commands are sent as Socket.IO machine events. Local changes are reflected optimistically in Home Assistant and reconciled when the cloud echoes the new state back.
+- **Temperature units.** Home Assistant always presents temperatures in Celsius. Devices reporting in Fahrenheit are transparently converted in both directions — values you set in HA are sent to the device in its native units.
+
+## Known Limitations
+
+- Reauthentication is required if your refresh token expires (e.g. you change your DKN Cloud NA password). Home Assistant will surface a "Reconfigure" prompt when this happens.
+- Multi-zone systems are exposed as one climate entity per indoor unit; there is no aggregate "installation" entity.
 
 ---
 
