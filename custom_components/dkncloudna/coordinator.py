@@ -12,7 +12,7 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import DknAuthError, DknCloudNaClient, DknConnectionError
-from .const import DEFAULT_SCAN_INTERVAL, DOMAIN, LOGGER
+from .const import CONF_REFRESH_TOKEN, CONF_USER_TOKEN, DEFAULT_SCAN_INTERVAL, DOMAIN, LOGGER
 
 
 class DknCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -64,6 +64,8 @@ class DknCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         except Exception as err:  # noqa: BLE001
             raise UpdateFailed(f"Unexpected error: {type(err).__name__}") from err
 
+        self._persist_tokens_if_changed()
+
         devices: dict[str, dict[str, Any]] = {}
         existing = self.data or {}
         for installation in installations or []:
@@ -79,6 +81,25 @@ class DknCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 }
 
         return devices
+
+    def _persist_tokens_if_changed(self) -> None:
+        """Save refreshed tokens back to the config entry so they survive restarts."""
+        opts = self._entry.options
+        stored_token = opts.get(CONF_USER_TOKEN)
+        stored_refresh = opts.get(CONF_REFRESH_TOKEN)
+        if (
+            self.client.token
+            and self.client.refresh_token
+            and (
+                self.client.token != stored_token
+                or self.client.refresh_token != stored_refresh
+            )
+        ):
+            new_opts = dict(opts)
+            new_opts[CONF_USER_TOKEN] = self.client.token
+            new_opts[CONF_REFRESH_TOKEN] = self.client.refresh_token
+            self.hass.config_entries.async_update_entry(self._entry, options=new_opts)
+            LOGGER.debug("DKN tokens persisted after refresh")
 
     async def async_handle_socket_device_data(
         self, mac: str, data: dict[str, Any]

@@ -90,7 +90,7 @@ class DknCloudNaClient:
                 "GET",
                 API_IS_LOGGED_IN,
                 require_auth=True,
-                auth_error_statuses={401, 403},
+                auth_error_statuses={401, 403, 404},
             )
         except DknAuthError:
             return False
@@ -106,7 +106,7 @@ class DknCloudNaClient:
             "GET",
             API_REFRESH_TOKEN.format(refresh_token=self.refresh_token),
             require_auth=bool(self.token),
-            auth_error_statuses={400, 401, 403},
+            auth_error_statuses={400, 401, 403, 404},
         )
         self._store_tokens(data)
 
@@ -117,7 +117,7 @@ class DknCloudNaClient:
             API_INSTALLATIONS,
             require_auth=True,
             retry_on_auth=True,
-            auth_error_statuses={401, 403},
+            auth_error_statuses={401, 403, 404},
         )
         if not isinstance(data, list):
             raise DknConnectionError("Unexpected installations response")
@@ -397,10 +397,20 @@ class DknCloudNaClient:
         except ClientError as err:
             raise DknConnectionError(str(err) or type(err).__name__) from err
 
-        LOGGER.debug("DKN response %s %s status=%s", method, url, response.status)
+        if response.status >= 400:
+            LOGGER.warning(
+                "DKN API error %s %s status=%s body=%s",
+                method,
+                url,
+                response.status,
+                data if not isinstance(data, str) or len(data) < 200 else data[:200],
+            )
+        else:
+            LOGGER.debug("DKN response %s %s status=%s", method, url, response.status)
 
         if response.status in (auth_error_statuses or set()):
             if retry_on_auth and self.refresh_token:
+                LOGGER.info("DKN token expired, attempting refresh")
                 await self.refresh_access_token()
                 return await self._request(
                     method,

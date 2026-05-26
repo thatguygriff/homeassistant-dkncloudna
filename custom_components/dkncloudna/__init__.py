@@ -9,8 +9,17 @@ from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import DknCloudNaClient
-from .const import CONF_REFRESH_TOKEN, CONF_USER_TOKEN, DOMAIN, LOGGER
+from .const import (
+    CONF_EXPOSE_PII,
+    CONF_REFRESH_TOKEN,
+    CONF_SCAN_INTERVAL,
+    CONF_USER_TOKEN,
+    DOMAIN,
+    LOGGER,
+)
 from .coordinator import DknCoordinator
+
+_RELOAD_KEYS = {CONF_SCAN_INTERVAL, CONF_EXPOSE_PII}
 
 PLATFORMS: list[Platform] = [
     Platform.CLIMATE,
@@ -44,6 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
         "client": client,
+        "_prev_options": dict(entry.options),
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -74,5 +84,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload entry when options change."""
-    await hass.config_entries.async_reload(entry.entry_id)
+    """Reload entry when user-facing options change (not token refreshes)."""
+    domain_data = hass.data.get(DOMAIN, {}).get(entry.entry_id, {})
+    prev_opts = domain_data.get("_prev_options", {})
+    if any(entry.options.get(k) != prev_opts.get(k) for k in _RELOAD_KEYS):
+        await hass.config_entries.async_reload(entry.entry_id)
+    domain_data["_prev_options"] = dict(entry.options)
