@@ -8,5 +8,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/lavoiesl/homeassistant-dkncloudna/issues",
   "requirements": ["python-socketio>=4.6.1,<5"],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
