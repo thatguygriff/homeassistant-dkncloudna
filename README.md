@@ -31,7 +31,7 @@ Any Daikin mini-split system connected to the **DKN Cloud NA** WiFi adapter (Nor
 1. Open HACS in your Home Assistant instance
 2. Go to **Integrations**
 3. Click the **⋮** menu → **Custom repositories**
-4. Add `https://github.com/lavoiesl/homeassistant-dkncloudna` as an **Integration**
+4. Add `https://github.com/thatguygriff/homeassistant-dkncloudna` as an **Integration**
 5. Search for **DKN Cloud NA** and install it
 6. Restart Home Assistant
 
