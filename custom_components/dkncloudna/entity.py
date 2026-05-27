@@ -77,8 +77,20 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
     # Optimistic overlays
     # ------------------------------------------------------------------
 
-    def _optimistic_set(self, key: str, value: Any) -> None:
-        """Store a locally-set value with a TTL timestamp."""
+    def _optimistic_set(
+        self,
+        key: str,
+        value: Any,
+        *,
+        device_key: str | None = None,
+        device_value: Any = None,
+    ) -> None:
+        """Store a locally-set value with a TTL timestamp.
+
+        When ``device_key`` is provided, ``_reconcile_optimistic`` will clear
+        the overlay as soon as the device data reports ``device_value`` for
+        that key — i.e. as soon as the cloud confirms the write.
+        """
         bucket = self.hass.data.setdefault(DOMAIN, {}).setdefault(
             self.coordinator.entry_id, {}
         )
@@ -87,6 +99,8 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
         device_overlays[key] = {
             "value": value,
             "expires": time.monotonic() + OPTIMISTIC_TTL_SEC,
+            "device_key": device_key,
+            "device_value": device_value,
         }
 
     def _optimistic_get(self, key: str, fallback: Any) -> Any:
@@ -103,6 +117,25 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
         bucket = self.hass.data.get(DOMAIN, {}).get(self.coordinator.entry_id, {})
         overlays = bucket.get("optimistic", {}).get(self._mac, {})
         overlays.pop(key, None)
+
+    def _reconcile_optimistic(self) -> None:
+        """Clear overlays whose tracked device key now reports the expected value."""
+        bucket = self.hass.data.get(DOMAIN, {}).get(self.coordinator.entry_id, {})
+        overlays = bucket.get("optimistic", {}).get(self._mac)
+        if not overlays:
+            return
+        device = self._device_data
+        for overlay_key in list(overlays):
+            entry = overlays[overlay_key]
+            device_key = entry.get("device_key")
+            if device_key is None:
+                continue
+            if device.get(device_key) == entry["device_value"]:
+                overlays.pop(overlay_key, None)
+
+    def _handle_coordinator_update(self) -> None:
+        self._reconcile_optimistic()
+        super()._handle_coordinator_update()
 
     # ------------------------------------------------------------------
     # Post-write coordinator refresh (coalesced)
@@ -125,22 +158,3 @@ class DknEntity(CoordinatorEntity[DknCoordinator]):
             await self.coordinator.async_request_refresh()
 
         bucket["pending_refresh"] = self.hass.async_create_task(_do_refresh())
-
-    async def _wait_for_device_value(
-        self,
-        key: str,
-        expected: Any,
-        timeout: float = 10.0,
-        interval: float = 0.5,
-    ) -> bool:
-        """Wait for a device property to match the expected value."""
-        deadline = time.monotonic() + timeout
-        next_refresh = time.monotonic() + 2.0
-        while time.monotonic() < deadline:
-            if self._device_data.get(key) == expected:
-                return True
-            if time.monotonic() >= next_refresh:
-                await self.coordinator.async_request_refresh()
-                next_refresh = time.monotonic() + 2.0
-            await asyncio.sleep(interval)
-        return self._device_data.get(key) == expected

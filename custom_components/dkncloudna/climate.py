@@ -189,8 +189,15 @@ class DknClimateEntity(DknEntity, ClimateEntity):
                     await self.coordinator.client.async_send_machine_event(
                         installation_id, self._command_mac, "power", False
                     )
-                    self._optimistic_set("power", False)
-                    self._optimistic_set("hvac_mode", HVACMode.OFF)
+                    self._optimistic_set(
+                        "power", False, device_key="power", device_value=False
+                    )
+                    self._optimistic_set(
+                        "hvac_mode",
+                        HVACMode.OFF,
+                        device_key="power",
+                        device_value=False,
+                    )
                 else:
                     mode = _HVAC_TO_MODE.get(hvac_mode)
                     if mode is None:
@@ -201,8 +208,15 @@ class DknClimateEntity(DknEntity, ClimateEntity):
                     await self.coordinator.client.async_send_machine_event(
                         installation_id, self._command_mac, "mode", mode
                     )
-                    self._optimistic_set("power", True)
-                    self._optimistic_set("hvac_mode", hvac_mode)
+                    self._optimistic_set(
+                        "power", True, device_key="power", device_value=True
+                    )
+                    self._optimistic_set(
+                        "hvac_mode",
+                        hvac_mode,
+                        device_key="mode",
+                        device_value=mode,
+                    )
             except Exception as err:  # noqa: BLE001
                 raise HomeAssistantError(f"Failed to set HVAC mode: {err}") from err
 
@@ -241,15 +255,27 @@ class DknClimateEntity(DknEntity, ClimateEntity):
                     await self.coordinator.client.async_send_machine_event(
                         installation_id, self._command_mac, "mode", requested_mode_code
                     )
-                    self._optimistic_set("power", True)
-                    self._optimistic_set("hvac_mode", target_mode)
+                    self._optimistic_set(
+                        "power", True, device_key="power", device_value=True
+                    )
+                    self._optimistic_set(
+                        "hvac_mode",
+                        target_mode,
+                        device_key="mode",
+                        device_value=requested_mode_code,
+                    )
                 await self.coordinator.client.async_send_machine_event(
                     installation_id, self._command_mac, property_name, device_temp
                 )
             except Exception as err:  # noqa: BLE001
                 raise HomeAssistantError(f"Failed to set temperature: {err}") from err
 
-        self._optimistic_set("target_temp", float(temperature))
+        self._optimistic_set(
+            "target_temp",
+            float(temperature),
+            device_key=property_name,
+            device_value=device_temp,
+        )
         self._schedule_refresh()
         self.async_write_ha_state()
 
@@ -269,7 +295,9 @@ class DknClimateEntity(DknEntity, ClimateEntity):
             except Exception as err:  # noqa: BLE001
                 raise HomeAssistantError(f"Failed to set fan mode: {err}") from err
 
-        self._optimistic_set("fan_mode", fan_mode)
+        self._optimistic_set(
+            "fan_mode", fan_mode, device_key="speed_state", device_value=speed
+        )
         self._schedule_refresh()
         self.async_write_ha_state()
 
@@ -289,7 +317,9 @@ class DknClimateEntity(DknEntity, ClimateEntity):
             except Exception as err:  # noqa: BLE001
                 raise HomeAssistantError(f"Failed to set swing mode: {err}") from err
 
-        self._optimistic_set("swing_mode", swing_mode)
+        self._optimistic_set(
+            "swing_mode", swing_mode, device_key="slats_vertical_1", device_value=slat
+        )
         self._schedule_refresh()
         self.async_write_ha_state()
 
