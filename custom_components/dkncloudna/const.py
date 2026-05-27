@@ -39,9 +39,11 @@ DEFAULT_SCAN_INTERVAL = 60  # seconds
 MIN_SCAN_INTERVAL = 30
 MAX_SCAN_INTERVAL = 300
 
-# Optimistic overlay: how long to hold a locally-set value before trusting
-# the next coordinator refresh. Must exceed the write→cloud→poll round-trip.
-OPTIMISTIC_TTL_SEC: float = 2.5
+# Optimistic overlay: safety bound for cloud-propagation lag. Overlays
+# normally clear earlier via reconciliation once the device echoes the
+# requested value; this TTL guarantees the UI cannot get stuck on a
+# locally-set value indefinitely if the write was silently rejected.
+OPTIMISTIC_TTL_SEC: float = 30.0
 
 # Post-write coordinator refresh: coalesced delay after a device command.
 POST_WRITE_REFRESH_DELAY_SEC: float = 1.0
